@@ -22,6 +22,32 @@ import time
 import wandb
 import string
 import json
+from matplotlib import pyplot as plt
+def save_img(img,name):
+    if len(x.shape)>3:
+        img = img.squeeze()
+    try:
+        if torch.max(img)==1:
+            img_post = img.detach().cpu().permute(1,2,0)
+        else:
+            img_post = img.detach().cpu().permute(1,2,0)/255
+    except:
+        img_post = img
+    plt.imshow(img_post)
+    plt.savefig(name)
+def show_img(img):
+    if len(x.shape)>3:
+        img = img.squeeze()
+    try:
+        if torch.max(img)<100:
+            img_post = img.detach().cpu().permute(1,2,0)
+        else:
+            img_post = img.detach().cpu().permute(1,2,0)/255
+
+    except:
+        img_post = img
+    plt.imshow(img_post)
+    plt.show()
 def get_obj_from_str(string, reload=False):
    
     module, cls = string.rsplit(".", 1)
@@ -158,12 +184,8 @@ class WrappedDataset(Dataset):
         counter = 0
         chars_dict = {}
         #get general data path, the dir with all the data always has dir named "train"
-        hierercies = dataset.data.labels["file_path_"][0].split("/")
-        data_path = "/"
-        for hier in hierercies:
-            if hier=="train" or  hier=="test":
-                break
-            data_path=data_path+hier+"/"
+        hierercies = dataset.data.images_list_file.split("/")[:-1]
+        data_path = "/".join(hierercies)
 
         for char in total_chars:
             chars_dict[char]=counter

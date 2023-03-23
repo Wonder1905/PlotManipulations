@@ -21,14 +21,14 @@ class ConcatDatasetWithIndex(ConcatDataset):
 
 
 class ImagePaths(Dataset):
-    def __init__(self, paths, size=None, random_crop=False, labels=None, augment=False):
+    def __init__(self, paths, size=None, random_crop=False, labels=None, augment=False,images_list_file=None):
         self.size = size
         self.random_crop = random_crop
         self.augment = augment
         self.labels = dict() if labels is None else labels
         self.labels["file_path_"] = paths
         self._length = len(paths)
-
+        self.images_list_file=images_list_file
         if self.size is not None and self.size > 0:
             self.rescaler = A.Resize(self.size,self.size)#A.SmallestMaxSize(max_size = self.size)
             if not self.random_crop and False:
