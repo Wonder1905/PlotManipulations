@@ -26,8 +26,22 @@ class ImagePaths(Dataset):
         self.random_crop = random_crop
         self.augment = augment
         self.labels = dict() if labels is None else labels
-        self.labels["file_path_"] = paths
-        self._length = len(paths)
+        new_labels = []
+        hierercies = images_list_file.split("/")[:-1]
+        data_path = "/".join(hierercies)
+        for path in paths:
+            if "/train" in path:
+                new_k1 = path.split("/train")[1]
+                connector = "/train/"
+            elif "/test" in path:
+                new_k1 = path.split("/test")[1]
+                connector = "/test/"
+            new_k1 = new_k1.replace("//", "/")#.split("/")[1]
+            new_path = f"{data_path}/{connector}/{new_k1}"
+            new_path = new_path.replace("///","/").replace("//","/")
+            new_labels.append(new_path)
+        self.labels["file_path_"] = new_labels
+        self._length = len(new_labels)
         self.images_list_file=images_list_file
         if self.size is not None and self.size > 0:
             self.rescaler = A.Resize(self.size,self.size)#A.SmallestMaxSize(max_size = self.size)
