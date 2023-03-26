@@ -39,7 +39,7 @@ class VQModelCTCAux(pl.LightningModule):
         self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25,
                                         remap=remap, sane_index_shape=sane_index_shape)
         self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
-        self.ctc_head  = CTCAuxWrapper()
+        self.ctc_head  = CTCAuxWrapper(image_size=ddconfig["image_size"])
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         self.ckpt_path = ckpt_path
         if ckpt_path is not None:

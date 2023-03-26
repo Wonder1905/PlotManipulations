@@ -5,6 +5,7 @@ model:
     embed_dim: 256
     n_embed: 16384
     ddconfig:
+      image_size: 512
       double_z: false
       z_channels: 256
       resolution: 256
@@ -43,21 +44,21 @@ data:
     train:
       target: taming.data.custom.CustomTrain
       params:
-        training_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_train.txt
-        size: 384
+        training_images_list_file: ./PlotsLegend/matplots_img_train.txt
+        size: 512
         random_crop: False
         augment: False
     validation:
       target: taming.data.custom.CustomTest
       params:
-        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
-        size: 384
+        test_images_list_file: ./PlotsLegend/matplots_img_test.txt
+        size: 512
         random_crop: False
         augment: False
     test:
       target: taming.data.custom.CustomTest
       params:
-        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
-        size: 384
+        test_images_list_file: ./PlotsLegend/matplots_img_test.txt
+        size: 512
         random_crop: False
         augment: False

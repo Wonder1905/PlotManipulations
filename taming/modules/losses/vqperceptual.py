@@ -183,7 +183,7 @@ class VQLPIPSWithDiscriminatorOCR(nn.Module):
             self.perceptual_weight = 1 # Set this to one in the test set, to evaluate it
         if self.less4blank_loss:
 
-            importance_map = torch.where(inputs != 1., 1., 0.) + 0.01
+            importance_map = torch.where(inputs != 1., 1., 0.01)
             importance_map = torch.clip(importance_map.sum(1).unsqueeze(1), 0, 1)
             # plt.imshow(importance_map.squeeze(0).repeat(3, 1, 1).permute(1, 2, 0).cpu().numpy())
             importance_map_dila = kornia.morphology.dilation(importance_map, kernel=torch.ones(3, 3).cuda())
@@ -193,10 +193,12 @@ class VQLPIPSWithDiscriminatorOCR(nn.Module):
                 #plt.imshow(inputs[0, :, int(384 * coord["y0"] / 480):int(384 * coord["y1"] / 480),
                 #           int(384 * coord["x0"] / 640):int(384 * coord["x1"] / 640)].permute(1, 2, 0).cpu().numpy())
                 #plt.imshow(inputs[0, :, coord["y1"]:coord["y0"], coord["x0"] : coord["x1"]].permute(1, 2, 0).cpu().numpy())
-                importance_map_focus_legend = torch.where(inputs != 1., 0., 0.)
-                importance_map_focus_legend[0, :, coord["y1"]:coord["y0"], coord["x0"]: coord["x1"]]=0.5
-                importance_map_dila = 3*importance_map_focus_legend + importance_map_dila
-            rec_loss = importance_map_dila.detach()*torch.abs(inputs.contiguous() - reconstructions.contiguous())
+                importance_map_focus_legend = torch.zeros_like(importance_map_dila)
+                for ind in range(len(importance_map_focus_legend)):
+                    importance_map_focus_legend[ind, :, coord["y0"][ind]:coord["y1"][ind], \
+                    coord["x0"][ind]: coord["x1"][ind]] = 0.5
+                importance_map_dila = 3 * importance_map_focus_legend + importance_map_dila
+            rec_loss = importance_map_dila.detach() * torch.abs(inputs.contiguous() - reconstructions.contiguous())
         else:
             rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
         if self.perceptual_weight > 0:

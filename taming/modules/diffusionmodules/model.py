@@ -200,12 +200,13 @@ class CTCAuxHeads(nn.Module):
     ##Output  1.title ctc prediction,i.e:B,30.2legend title ctc i.e.: B,45, 15 for each possible pred
     def __init__(self, num_classes=2, image_size=384):
         super().__init__()
+        spatial_input_size = image_size // 16
         self.gelu = nn.GELU()
         self.conv1 = nn.Conv2d(256, 384, kernel_size=3, stride=2, padding=1)
-        self.ln1 = nn.LayerNorm((384, 12, 12))
+        self.ln1 = nn.LayerNorm((384, spatial_input_size // 2, spatial_input_size // 2))
         self.conv2 = nn.Conv2d(384, 256, kernel_size=3, stride=2, padding=1)
-        self.ln2 = nn.LayerNorm((256, 6, 6))
-        self.lin1 = nn.Linear(36, 64)
+        self.ln2 = nn.LayerNorm((256, spatial_input_size // 4, spatial_input_size // 4))
+        self.lin1 = nn.Linear((spatial_input_size // 4)**2, 64)
         self.ln_lin1 = nn.LayerNorm(64)
         self.title_ctc_head = nn.Linear(64, 35)
         self.ln_tit = nn.LayerNorm((256, 35))
@@ -236,9 +237,9 @@ class CTCAuxHeads(nn.Module):
 class CTCAuxWrapper(nn.Module):
     ##Input   B,256,24,24
     ##Output  1.title ctc prediction,i.e:B,30.2legend title ctc i.e.: B,45, 15 for each possible pred
-    def __init__(self, num_classes=68):
+    def __init__(self, num_classes=68, image_size=384):
         super().__init__()
-        self.ctchead = CTCAuxHeads(num_classes=num_classes)
+        self.ctchead = CTCAuxHeads(num_classes=num_classes, image_size=image_size)
 
     def get_ctclabels(self, batch):
         x = batch

@@ -263,6 +263,8 @@ class WrappedDataset(Dataset):
                 meta_data["lines"][line_idx]["legend_of_plot_tokenized"]= self.tokenizer(lop).input_ids
             else:
                 meta_data["lines"][line_idx]= {}
+                meta_data["lines"][line_idx]["legend_of_plot"] = ""
+                meta_data["lines"][line_idx]["color"] = ""
                 meta_data["lines"][line_idx]["legend_of_plot_tokenized"]=[""]
             meta_data["lines"][line_idx]["legend_of_plot_tokenized"],pad = self.pad(meta_data["lines"][line_idx]["legend_of_plot_tokenized"], self.length_lop)
             lop_pads.append(pad)
@@ -271,11 +273,15 @@ class WrappedDataset(Dataset):
             meta_data["lop_concat"]= torch.cat([meta_data["lop_concat"],meta_data["lines"][l]["legend_of_plot_tokenized"]])
         meta_data["lop_pads"] = lop_pads
         pixel_legend = meta_data["legend_location_pixels"]
-        x0=int(384 * int(pixel_legend.x0.item()) / 640)
-        x1=int(384 * int(pixel_legend.x1.item()) / 640)
-        y0=int(384 * (480-int(pixel_legend.y0.item())) / 480)
-        y1=int(384 * (480-int(pixel_legend.y1.item())) / 480)
+        x0=int(self.data.data.size * int(pixel_legend.x0.item()) / 640)
+        x1=int(self.data.data.size * int(pixel_legend.x1.item()) / 640)
 
+        if self.data.data.size > 480:
+            y0=int(self.data.data.size * (int(480 - pixel_legend.y1.item())) / 480)
+            y1=int(self.data.data.size * (int(480 - pixel_legend.y0.item())) / 480)
+        else:
+            y0=int(self.data.data.size * (int(480 - pixel_legend.y0.item())) / 480)
+            y1=int(self.data.data.size * (int(480 - pixel_legend.y1.item())) / 480)
 
         meta_data["cordinates"] = {"x0":x0,"x1":x1,"y0":y0,"y1":y1}
         del meta_data["legend_location_pixels"]
