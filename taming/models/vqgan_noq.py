@@ -83,7 +83,7 @@ class VQModelCTCAuxCondNoQ(pl.LightningModule):
         ###Encocde Image
         encoder_output = self.encoder(input_figure)
         ##
-        predicted_output_lop = self.ctc_head_predict_legend(encoder_output,text_embeds_perc)
+        #predicted_output_lop = self.ctc_head_predict_legend(encoder_output,text_embeds_perc)
         ###
         mid_layers = self.quant_conv(encoder_output)
         h = self.post_quant_conv(mid_layers)
