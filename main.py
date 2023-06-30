@@ -3,6 +3,10 @@
 from transformers import (
     Wav2Vec2PhonemeCTCTokenizer,
 )
+from scipy.signal import convolve2d
+from scipy import ndimage
+
+import kornia
 import argparse, os, sys, datetime, glob, importlib
 from omegaconf import OmegaConf
 import numpy as np
@@ -22,9 +26,11 @@ import time
 import wandb
 import string
 import json
+import numpy as np
 from matplotlib import pyplot as plt
+from taming.modules.t5 import t5_tokenize,DEFAULT_T5_NAME
 def save_img(img,name):
-    if len(x.shape)>3:
+    if len(img.shape)>3:
         img = img.squeeze()
     try:
         if torch.max(img)==1:
@@ -233,8 +239,9 @@ class WrappedDataset(Dataset):
                 workspace_sample_dict[k][path]=v1
         self.samples_dict = workspace_sample_dict
         self.length_title = 35
-        self.length_lop = 20
         self.max_plots_per_figure = 3
+        self.length_lop = 20*self.max_plots_per_figure
+
         self.pad_index = torch.tensor(self.tokenizer.encode(self.pad_token)).long()
         self.eos_index = torch.tensor(self.tokenizer.encode(self.eos_token)).long()
     def __len__(self):
@@ -250,34 +257,30 @@ class WrappedDataset(Dataset):
             tokens = torch.cat([tokens,self.pad_index])
         return tokens,diff
 
-    def tokenize(self,dir,path_after_replace):
-        meta_data = self.samples_dict[dir][path_after_replace].copy()
-        meta_data_title = " ".join(self.samples_dict[dir][path_after_replace]["title"].replace(" ","|"))
-        meta_data["title_tokenized"] = self.tokenizer(meta_data_title).input_ids
-        meta_data["title_tokenized"],meta_data["title_tokenized_pad"] = self.pad(meta_data["title_tokenized"],self.length_title)
+    def tokenize(self, dir,path_after_replace):
+        meta_data["input"]["title"]
+        meta_data["title"] = meta_data_title
         lop_pads = []
-        for line_idx in range(self.max_plots_per_figure):#len(self.samples_dict[dir][path_after_replace]["lines"])):
+        for line_idx in range(self.max_plots_per_figure):  # len(self.samples_dict[dir][path_after_replace]["lines"])):
             if line_idx in self.samples_dict[dir][path_after_replace]["lines"]:
                 line = self.samples_dict[dir][path_after_replace]["lines"][line_idx]
-                lop = " ".join(line["legend_of_plot"].replace(" ", "|"))
-                meta_data["lines"][line_idx]["legend_of_plot_tokenized"]= self.tokenizer(lop).input_ids
+                lop = " ".join(line["legend_of_plot"].replace(" ", ""))
+                meta_data["lines"][line_idx]["legend_of_plot"] = lop
             else:
-                meta_data["lines"][line_idx]= {}
-                meta_data["lines"][line_idx]["legend_of_plot_tokenized"]=[""]
-            meta_data["lines"][line_idx]["legend_of_plot_tokenized"],pad = self.pad(meta_data["lines"][line_idx]["legend_of_plot_tokenized"], self.length_lop)
-            lop_pads.append(pad)
-        meta_data["lop_concat"] = torch.tensor([]).long()
-        for l  in range(len(self.samples_dict[dir][path_after_replace]["lines"])):
-            meta_data["lop_concat"]= torch.cat([meta_data["lop_concat"],meta_data["lines"][l]["legend_of_plot_tokenized"]])
-        meta_data["lop_pads"] = lop_pads
+                meta_data["lines"][line_idx] = {}
+                meta_data["lines"][line_idx]["legend_of_plot"] = [""]
+        meta_data["lop_concat"] = ""
+        for l in range(len(self.samples_dict[dir][path_after_replace]["lines"])):
+            if isinstance(meta_data["lines"][l]["legend_of_plot"], list):
+                continue  ##if list it is empty list
+            meta_data["lop_concat"] = meta_data["lop_concat"] + meta_data["lines"][l]["legend_of_plot"]
         pixel_legend = meta_data["legend_location_pixels"]
-        x0=int(384 * int(pixel_legend.x0.item()) / 640)
-        x1=int(384 * int(pixel_legend.x1.item()) / 640)
-        y0=int(384 * (480-int(pixel_legend.y0.item())) / 480)
-        y1=int(384 * (480-int(pixel_legend.y1.item())) / 480)
+        x0 = int(384 * int(pixel_legend.x0.item()) / 640)
+        x1 = int(384 * int(pixel_legend.x1.item()) / 640)
+        y0 = int(384 * (480 - int(pixel_legend.y0.item())) / 480)
+        y1 = int(384 * (480 - int(pixel_legend.y1.item())) / 480)
 
-
-        meta_data["cordinates"] = {"x0":x0,"x1":x1,"y0":y0,"y1":y1}
+        meta_data["cordinates"] = {"x0": x0, "x1": x1, "y0": y0, "y1": y1}
         del meta_data["legend_location_pixels"]
         return meta_data
 
@@ -287,8 +290,133 @@ class WrappedDataset(Dataset):
         image, path = sample['image'],sample["file_path_"]
         dir = path.split("/")[-2]
         path_after_replace = path.replace("//","/")
-        meta_data = self.tokenize(dir,path_after_replace)
-        return sample,meta_data
+        #meta_data = self.tokenize(dir,path_after_replace)
+        return sample#,meta_data
+
+class WrappedTextDataset(Dataset):
+    """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
+    def __init__(self, dataset,subset):
+        self.data = dataset
+        self.eos_token = '</s>'
+        self.bos_token = '<s>'
+        self.unk_token = '<unk>'
+        self.pad_token = '<pad>'
+        self.word_delimiter_token = '|'
+        total_chars  = string.ascii_letters +string.digits+" " #also adding space
+        counter = 0
+        chars_dict = {}
+        #get general data path, the dir with all the data always has dir named "train"
+        hierercies = dataset.data.images_list_file.split("/")[:-1]
+        data_path = "/".join(hierercies)
+
+        for char in total_chars:
+            chars_dict[char]=counter
+            counter += 1
+
+        chars_dict[self.eos_token] = len(chars_dict)
+        chars_dict[self.bos_token] = len(chars_dict)
+        chars_dict[self.unk_token] = len(chars_dict)
+        chars_dict[self.pad_token] = len(chars_dict)
+        chars_dict[self.word_delimiter_token] = len(chars_dict)
+        vocab_file_path = "vocab.json"
+        with open(vocab_file_path, "w") as vocab_file:
+            json.dump(chars_dict, vocab_file)
+        if subset=="train":
+            self.samples_dict   = torch.load(f"{data_path}/samples_dict.pth")
+        else:
+            self.samples_dict   = torch.load(f"{data_path}/samples_dict_test.pth")
+        self.phone_delimiter_token = ' ',
+        self.tokenizer =   Wav2Vec2PhonemeCTCTokenizer(
+            vocab_file=vocab_file_path,
+            eos_token=self.eos_token,
+            bos_token=self.bos_token,
+            unk_token=self.unk_token,
+            pad_token=self.pad_token,
+            word_delimiter_token=self.word_delimiter_token,
+            phone_delimiter_token=self.phone_delimiter_token,
+            do_phonemize=False,
+            return_attention_mask=True,
+        )
+        ##Adjusting the path in the sample_dict to generalize all users
+        workspace_sample_dict = {}
+        for k, v in self.samples_dict.items():
+            workspace_sample_dict[k]={}
+            for k1, v1 in v.items():
+                k1 = k1.replace("//","/")
+                if "/train" in k1:
+                    new_k1 = k1.split("/train")[1]
+                    connector = "/train/"
+                elif "/test" in k1:
+                    new_k1 = k1.split("/test")[1]
+                    connector = "/test/"
+                new_k1 = new_k1.replace("//", "/")#.split("/")[1]
+                path = f"{data_path}/{connector}/{new_k1}"
+                path = path.replace("///","/").replace("//","/")
+                workspace_sample_dict[k][path]=v1
+        self.samples_dict = workspace_sample_dict
+        self.length_title = 35
+        self.length_lop = 20
+        self.max_plots_per_figure = 3
+        self.pad_index = torch.tensor(self.tokenizer.encode(self.pad_token)).long()
+        self.eos_index = torch.tensor(self.tokenizer.encode(self.eos_token)).long()
+    def __len__(self):
+        return len(self.data)
+    def pad(self,tokens,dest_length,lop=False):
+        if tokens==[""]:
+            tokens = torch.tensor([]).long()
+        else:
+            tokens = torch.tensor(tokens).long()
+
+
+        cur_length = len(tokens)
+        diff = dest_length - cur_length
+        for _ in range(diff):
+            tokens = torch.cat([tokens,self.pad_index])
+        return tokens,diff
+
+    def tokenize_func(self,data):
+        data_spaces = " ".join(data).replace('< s >','<s>').replace('< / s >','</s>')
+        out = self.tokenizer(data_spaces).input_ids
+        return out
+
+
+    def tokenize(self,meta_data):
+        meta_data["input"]["lop_concat_tokenized"] = self.tokenize_func(meta_data["input"]["lop_concat"])
+        meta_data["output"]["lop_concat_tokenized"] = self.tokenize_func(meta_data["output"]["lop_concat"])
+        meta_data["input"]["title_tokenized"] = self.tokenize_func(meta_data["input"]["title"])
+        meta_data["output"]["title_tokenized"] = self.tokenize_func(meta_data["output"]["title"])
+        # meta_data = self.samples_dict[dir][path_after_replace].copy()
+        # meta_data_title = " ".join(self.samples_dict[dir][path_after_replace]["title"].replace(" ","|"))
+        # meta_data["title_tokenized"] = self.tokenizer(meta_data_title).input_ids
+        meta_data["input"]["lop_concat_tokenized"],meta_data["input"]["lop_concat_tokenized_mask"] = self.pad(meta_data["input"]["lop_concat_tokenized"],self.length_lop*3,lop=True)
+        meta_data["input"]["title_tokenized"],meta_data["input"]["title_tokenized_mask"] = self.pad(meta_data["input"]["title_tokenized"],self.length_title)
+        meta_data["output"]["lop_concat_tokenized"],meta_data["output"]["lop_concat_tokenized_mask"] = self.pad(meta_data["output"]["lop_concat_tokenized"],self.length_lop*3,lop=True)
+        meta_data["output"]["title_tokenized"],meta_data["output"]["title_tokenized_mask"] = self.pad(meta_data["output"]["title_tokenized"],self.length_title)
+        return meta_data
+    def get_segmap(self,image,pixel_legend):
+        out_tensor = np.ones_like(image)
+        x0 = int(512 * int(pixel_legend.x0.item()) / 640)
+        x1 = int(512 * int(pixel_legend.x1.item()) / 640)
+        y0 = int(512 * (480 - int(pixel_legend.y0.item())) / 480)
+        y1 = int(512 * (480 - int(pixel_legend.y1.item())) / 480)
+        legend_loc = {"xmin":x0,"xmax":x1,"ymin":y1,"ymax":y0}
+        out_tensor[y1:y0, x0+30:x1, :] = image[y1:y0, x0+30:x1, :]
+        out_tensor[10:60, 70:530, :] = image[10:60, 70:530, :]#title
+        mask = np.where(np.mean(out_tensor,-1)>-0.1,-1.,1.)
+
+        return mask,out_tensor,legend_loc
+    def __getitem__(self, idx):
+        sample,meta_data= self.data[idx]
+        out_pixel_legend = meta_data["output"]["legend_location_pixels"]
+        out_seg_map,tensor_nonbin,legend_loc = self.get_segmap(sample["output_image"],out_pixel_legend)
+        meta_data = self.tokenize(meta_data)
+        del meta_data["output"]["legend_location_pixels"]
+        del meta_data["input"]["legend_location_pixels"]
+        del meta_data["input"]["lop_concat"]
+        del meta_data["output"]["lop_concat"]
+        del meta_data["input"]["title"]
+        del meta_data["output"]["title"]
+        return sample,meta_data,tensor_nonbin,out_seg_map
 
 
 
@@ -320,7 +448,10 @@ class DataModuleFromConfig(pl.LightningDataModule):
             for k in self.dataset_configs)
         if self.wrap:
             for k in self.datasets:
-                self.datasets[k] = WrappedDataset(self.datasets[k],k)
+                if "text" in self.datasets[k].__name__().lower():
+                    self.datasets[k] = WrappedTextDataset(self.datasets[k],k)
+                else:
+                    self.datasets[k] = WrappedDataset(self.datasets[k],k)
 
     def _train_dataloader(self):
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
@@ -390,9 +521,9 @@ class ImageLogger(Callback):
             pl.loggers.WandbLogger: self._wandb,
             pl.loggers.TestTubeLogger: self._testtube,
         }
-        self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
-        if not increase_log_steps:
-            self.log_steps = [self.batch_freq]
+        self.log_steps = [100,200,300,400,500,600,700]#[2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
+        #if not increase_log_steps:
+        #    self.log_steps = [self.batch_freq]
         self.clamp = clamp
         self.disabled = disabled
         self.log_on_batch_idx = log_on_batch_idx
@@ -518,6 +649,8 @@ class CUDACallback(Callback):
 if __name__ == "__main__":
     #os.environ["WANDB_MODE"] = "offline"
     #os.environ["WANDB_DISABLED"] = "true"
+
+
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     sys.path.append(os.getcwd())  # add cwd to make main.py classes available
     parser = get_parser()
@@ -591,7 +724,7 @@ if __name__ == "__main__":
         
         # model
         config.model.params.lossconfig.params.less4blank_loss = opt.less4blank_loss
-        model = instantiate_from_config(config.model)
+
 
         # trainer and callbacks
         trainer_kwargs = dict()
@@ -636,10 +769,7 @@ if __name__ == "__main__":
                 "save_last": True,
             }
         }
-        if hasattr(model, "monitor"):
-            print(f"Monitoring {model.monitor} as checkpoint metric.")
-            default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 1
+
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
@@ -667,7 +797,7 @@ if __name__ == "__main__":
             "image_logger": {
                 "target": "main.ImageLogger",
                 "params": {
-                    "batch_frequency": 750,
+                    "batch_frequency": 1000,
                     "max_images": 4,
                     "clamp": True
                 }
@@ -725,14 +855,22 @@ if __name__ == "__main__":
         data = instantiate_from_config(config.data)
         data.prepare_data()
         data.setup()
-        if "CTC" in config['model']['target']:
-            model.ctc_head.add_tokenizer(data.datasets["train"])
+        # if "CTC" in config['model']['target']:
+        #     model.ctc_head.add_tokenizer(data.datasets["train"])
         print("#### Datasets #####")
         for k in data.datasets:
             print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
 
         # Configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
+
+        model = instantiate_from_config(config.model)
+        if hasattr(model, "monitor"):
+            print(f"Monitoring {model.monitor} as checkpoint metric.")
+            default_modelckpt_cfg["params"]["monitor"] = model.monitor
+            default_modelckpt_cfg["params"]["save_top_k"] = 1
+
+
 
         # Devices
         if not cpu:

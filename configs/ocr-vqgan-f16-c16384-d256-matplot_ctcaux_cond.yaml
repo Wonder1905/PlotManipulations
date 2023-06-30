@@ -1,9 +1,9 @@
 model:
-  base_learning_rate: 4.5e-04
-  target: taming.models.vqgan.VQModelCTCAux
+  base_learning_rate: 1e-04
+  target: taming.models.vqgan.VQModelCTCAuxCond
   params:
     embed_dim: 256
-    n_embed: 16384
+    n_embed: 1664
     ddconfig:
       use_ctc_emb: false
       double_z: false
@@ -27,15 +27,14 @@ model:
       params:
         disc_conditional: false
         disc_in_channels: 3
-        disc_start: 100000
-        disc_weight: 0.75
+        disc_start: 10000
+        disc_weight: 0.25
         disc_num_layers: 2
         codebook_weight: 1.0
 
         perceptual_weight: 0.2
         ocr_perceptual_weight: 1.0
-    ckpt_path: /workspace/ocr-vqgan/last.ckpt
-    pretrain_ocr: True
+    #ckpt_path: accum_grad_10_lessblank_ctc_pretrain/2023-02-23T13-13-10_ctc_pretrain/checkpoints/last.ckpt
 
 data:
   target: main.DataModuleFromConfig
@@ -43,23 +42,23 @@ data:
     batch_size: 1
     num_workers: 4
     train:
-      target: taming.data.custom.CustomTrain
+      target: taming.data.custom.CustomTextTrain
       params:
-        training_images_list_file: /workspace/Plots/03_02_2023/matplots_img_train.txt
-        size: 384
-        random_crop: True
-        augment: True
+        training_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_train.txt
+        size: 64
+        random_crop: False
+        augment: False
     validation:
-      target: taming.data.custom.CustomTest
+      target: taming.data.custom.CustomTextTest
       params:
-        test_images_list_file: /workspace/Plots/03_02_2023/matplots_img_test.txt
-        size: 384
+        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
+        size: 64
         random_crop: False
         augment: False
     test:
-      target: taming.data.custom.CustomTest
+      target: taming.data.custom.CustomTextTest
       params:
-        test_images_list_file: /workspace/Plots/03_02_2023/matplots_img_test.txt
-        size: 384
+        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
+        size: 64
         random_crop: False
         augment: False
