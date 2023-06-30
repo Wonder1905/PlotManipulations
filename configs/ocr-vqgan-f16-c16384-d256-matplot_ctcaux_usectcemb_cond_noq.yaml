@@ -1,0 +1,66 @@
+model:
+  base_learning_rate: 1e-05
+  target: taming.models.vqgan_noq.VQModelCTCAuxCondNoQ
+  params:
+    embed_dim: 256
+    n_embed: 16384
+    ddconfig:
+      use_ctc_emb: false
+      double_z: false
+      z_channels: 256
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 1
+      - 2
+      - 2
+      - 4
+      num_res_blocks: 2
+      attn_resolutions:
+      - 16
+      dropout: 0.0
+    lossconfig:
+      target: taming.modules.losses.vqperceptual.VQLPIPSWithDiscriminatorOCRNoQ
+      params:
+        disc_conditional: false
+        disc_in_channels: 3
+        disc_start: 100
+        disc_weight: 0.25
+        disc_num_layers: 2
+        codebook_weight: 1.0
+
+        perceptual_weight: 0.2
+        ocr_perceptual_weight: 1.0
+
+    #ckpt_path: condtext_512_tanh_noq/2023-06-10T08-54-57_condtext_512_tanh/checkpoints/last.ckpt
+    #ckpt_path: focus_on_legend2_usectcemb_discearlier/2023-04-12T14-32-16_focus_on_legend2_usectcemb_discearlier/checkpoints/last.ckpt
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 1
+    num_workers: 1
+    train:
+      target: taming.data.custom.CustomTextTrain
+      params:
+        training_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_train.txt
+        size: 512
+        random_crop: False
+        augment: False
+    validation:
+      target: taming.data.custom.CustomTextTest
+      params:
+        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
+        size: 512
+        random_crop: False
+        augment: False
+    test:
+      target: taming.data.custom.CustomTextTest
+      params:
+        test_images_list_file: /workspace/FigureEdit/PlotsLegend/matplots_img_test.txt
+        size: 512
+        random_crop: False
+        augment: False
