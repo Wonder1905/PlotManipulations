@@ -985,10 +985,18 @@ class DecoderCond(nn.Module):
         #    self.crossattn_iblock1 = CrossAttnBlock()
         self.norm_out = Normalize(block_in)
         self.conv_out = torch.nn.Conv2d(block_in,
-                                        out_ch,
+                                        5,
+                                        kernel_size=5,
+                                        stride=4,
+                                        padding=2)
+        self.norm_out_1 = nn.LayerNorm((128, 128))
+        self.conv_out1 = torch.nn.Conv2d(5,
+                                        1,
                                         kernel_size=3,
-                                        stride=1,
+                                        stride=2,
                                         padding=1)
+
+        self.gelu  =nn.GELU()
     #legends_emb=[B,256,35],title_emb=[B,256,60]
     def forward(self, z,text_emb=None,title_embs=None, legends_embs=None):
         # assert z.shape[1:] == self.z_shape[1:]
@@ -1022,8 +1030,9 @@ class DecoderCond(nn.Module):
             return h
         h = self.norm_out(h)
         h_before = nonlinearity(h)
-        h = self.conv_out(h_before)
-        return h,h_before
+        h = self.norm_out_1(self.gelu(self.conv_out(h_before)))
+        h = self.conv_out1(h)
+        return torch.sigmoid(h),h_before
 
 
 class DecoderCondAlsoOnTextPred(nn.Module):

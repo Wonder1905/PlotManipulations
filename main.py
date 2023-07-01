@@ -156,10 +156,6 @@ def get_parser(**parser_kwargs):
         help="directory for logging",
     )
 
-    parser.add_argument(
-        "--less4blank_loss",
-        action="store_true",
-    )
     return parser
 
 
@@ -402,7 +398,7 @@ class WrappedTextDataset(Dataset):
         legend_loc = {"xmin":x0,"xmax":x1,"ymin":y1,"ymax":y0}
         out_tensor[y1:y0, x0+30:x1, :] = image[y1:y0, x0+30:x1, :]
         out_tensor[10:60, 70:530, :] = image[10:60, 70:530, :]#title
-        mask = np.where(np.mean(out_tensor,-1)>-0.1,-1.,1.)
+        mask = np.where(np.mean(out_tensor,-1)>-0.1,0.,1.)
 
         return mask,out_tensor,legend_loc
     def __getitem__(self, idx):
@@ -723,7 +719,6 @@ if __name__ == "__main__":
         lightning_config.trainer = trainer_config
         
         # model
-        config.model.params.lossconfig.params.less4blank_loss = opt.less4blank_loss
 
 
         # trainer and callbacks

@@ -133,14 +133,15 @@ class VQLPIPSWithDiscriminator(nn.Module):
 class VQLPIPSWithDiscriminatorOCRNoQ(nn.Module):
     def __init__(self, disc_start, codebook_weight=1.0, pixelloss_weight=1.0,
                  disc_num_layers=3, disc_in_channels=3, disc_factor=1.0, disc_weight=1.0,
-                 perceptual_weight=0.2, ocr_perceptual_weight=1.0, use_actnorm=False, disc_conditional=False,
-                 disc_ndf=64, disc_loss="hinge",less4blank_loss=False):
+                 perceptual_weight=0.2, mask_supervision_weight=1 ,ocr_perceptual_weight=1.0, use_actnorm=False, disc_conditional=False,
+                 disc_ndf=64, disc_loss="hinge"):
         super().__init__()
         assert disc_loss in ["hinge", "vanilla"]
         self.codebook_weight = codebook_weight
         self.pixel_weight = pixelloss_weight
         self.perceptual_loss = LPIPS().eval()
         self.perceptual_weight = perceptual_weight
+        self.mask_supervision_weight = mask_supervision_weight
 
         # Definition of OCR perceptual losses
         self.ocr_perceptual_loss = OCR_CRAFT_LPIPS().eval() 
@@ -163,7 +164,6 @@ class VQLPIPSWithDiscriminatorOCRNoQ(nn.Module):
         self.disc_factor = disc_factor
         self.discriminator_weight = disc_weight
         self.disc_conditional = disc_conditional
-        self.less4blank_loss = less4blank_loss
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:
             nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
@@ -177,57 +177,62 @@ class VQLPIPSWithDiscriminatorOCRNoQ(nn.Module):
         d_weight = d_weight * self.discriminator_weight
         return d_weight
 
-    def forward(self,  inputs, reconstructions, optimizer_idx,
-                global_step, last_layer=None, cond=None, metadata=None, split="train", target_images=None):
-
-        if split == 'test':
-            self.perceptual_weight = 1 # Set this to one in the test set, to evaluate it
-        if self.less4blank_loss:
-            if target_images is not None:
-                importance_map = 100*torch.abs(inputs-target_images)+0.1 #such that there will be no zero elemnts
-                importance_map_notwhite_in = torch.where(inputs != 1., 100., 0.)
-                importance_map_notwhite_tar = torch.where(target_images != 1., 100., 0.)
-                importance_map = importance_map + 0.1*importance_map_notwhite_in+0.1*importance_map_notwhite_tar
-                importance_map = torch.clip(importance_map, 0, 100)
-                # plt.imshow(importance_map.squeeze(0).repeat(3, 1, 1).permute(1, 2, 0).cpu().numpy())
-                importance_map_dila = kornia.morphology.dilation(importance_map, kernel=torch.ones(5, 5).cuda())
+    def forward(self,  inputs, reconstructions,target_text_mask=None,pred_text_mask=None, optimizer_idx=0,
+                global_step=0, last_layer=None, cond=None, metadata=None, split="train", target_images=None):
+        if optimizer_idx == 1:
+            # second pass for discriminator update
+            if cond is None:
+                logits_real = self.discriminator(inputs.contiguous().detach())
+                logits_fake = self.discriminator(reconstructions.contiguous().detach())
             else:
-                target_images=inputs
-                importance_map = torch.where(inputs != 1., 1., 0.) + 0.001
-                importance_map = torch.clip(importance_map.sum(1).unsqueeze(1), 0, 1)
-                # plt.imshow(importance_map.squeeze(0).repeat(3, 1, 1).permute(1, 2, 0).cpu().numpy())
-                importance_map_dila = kornia.morphology.dilation(importance_map, kernel=torch.ones(3, 3).cuda())
-                if metadata is not None and False:
-                    coord = metadata["cordinates"]
-                    #plt.imshow(inputs[0].permute(1, 2, 0).cpu().numpy())
-                    #plt.imshow(inputs[0, :, int(384 * coord["y0"] / 480):int(384 * coord["y1"] / 480),
-                    #           int(384 * coord["x0"] / 640):int(384 * coord["x1"] / 640)].permute(1, 2, 0).cpu().numpy())
-                    #plt.imshow(inputs[0, :, coord["y1"]:coord["y0"], coord["x0"] : coord["x1"]].permute(1, 2, 0).cpu().numpy())
-                    importance_map_focus_legend = torch.where(inputs != 1., 0., 0.)
-                    importance_map_focus_legend[0, :, coord["y1"]:coord["y0"], coord["x0"]: coord["x1"]]=0.5
-                    importance_map_dila = 3*importance_map_focus_legend + importance_map_dila
+                logits_real = self.discriminator(torch.cat((inputs.contiguous().detach(), cond), dim=1))
+                logits_fake = self.discriminator(torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
+
+            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
+            d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
+
+            log = {
+                "{}/disc_loss".format(split): disc_factor * d_loss.clone().detach().mean(),
+                   #"{}/logits_real".format(split): logits_real.detach().mean(),
+                   #"{}/logits_fake".format(split): logits_fake.detach().mean()
+                   }
+            return d_loss, log
+        else:
+            if split == 'test':
+                self.perceptual_weight = 1 # Set this to one in the test set, to evaluate it
+
+            importance_map = 100*torch.abs(inputs-target_images)+0.1 #such that there will be no zero elemnts
+            importance_map_notwhite_in = torch.where(inputs != 1., 100., 0.)
+            importance_map_notwhite_tar = torch.where(target_images != 1., 100., 0.)
+            importance_map = importance_map + 0.1*importance_map_notwhite_in+0.1*importance_map_notwhite_tar
+            importance_map = torch.clip(importance_map, 0, 100)
+            importance_map_dila = kornia.morphology.dilation(importance_map, kernel=torch.ones(5, 5).cuda())
             rec_loss_map = importance_map_dila.detach()*torch.abs(target_images.contiguous() - reconstructions.contiguous())
             rec_loss =10* rec_loss_map.view(rec_loss_map.shape[0],-1).mean(-1)
-        else:
-            rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        if self.perceptual_weight > 0:
-            p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
-            total_loss = rec_loss.squeeze() + self.perceptual_weight * p_loss.squeeze()
-        else:
-            p_loss = torch.tensor([0.0])
 
-        if self.ocr_perceptual_weight > 0:
-            p_ocr_loss = self.ocr_perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
-            total_loss = total_loss + self.ocr_perceptual_weight * p_ocr_loss.squeeze()
-        else:
-            p_ocr_loss = torch.tensor([0.0])
+            if self.perceptual_weight > 0:
+                p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
+                total_loss = rec_loss.squeeze() + self.perceptual_weight * p_loss.squeeze()
+            else:
+                p_loss = torch.tensor([0.0])
 
-        
-        #nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
-        total_loss = torch.mean(total_loss)
+            if self.ocr_perceptual_weight > 0:
+                p_ocr_loss = self.ocr_perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
+                total_loss = total_loss + self.ocr_perceptual_weight * p_ocr_loss.squeeze()
+            else:
+                p_ocr_loss = torch.tensor([0.0])
+            if target_text_mask is not None:
+                target_text_mask_64 = F.interpolate(target_text_mask.unsqueeze(1), size=(64, 64), mode='nearest').float()
+                test_mask_loss = F.binary_cross_entropy(pred_text_mask,target_text_mask_64)#,weight=torch.tensor([1,10]).long())
+            else:
+                test_mask_loss = torch.tensor([0.0])
+            total_loss += self.mask_supervision_weight*test_mask_loss
 
-        # now the GAN part
-        if optimizer_idx == 0:
+
+            total_loss = torch.mean(total_loss)
+
+            # now the GAN part
+
             # generator update
             if cond is None:
                 assert not self.disc_conditional
@@ -250,34 +255,18 @@ class VQLPIPSWithDiscriminatorOCRNoQ(nn.Module):
                    "{}/rec_loss".format(split): rec_loss.detach().mean(),
                    "{}/ocr_loss".format(split): self.ocr_perceptual_weight * p_ocr_loss.squeeze().mean(),
                    "{}/p_loss".format(split): self.perceptual_weight *  p_loss.detach().mean(),
+                   "{}/mask_loss".format(split): self.mask_supervision_weight *  test_mask_loss.detach().mean(),
                    "{}/g_loss".format(split): disc_factor *d_weight *g_loss.detach().mean(),
                    }
             return loss, log
 
-        if optimizer_idx == 1:
-            # second pass for discriminator update
-            if cond is None:
-                logits_real = self.discriminator(inputs.contiguous().detach())
-                logits_fake = self.discriminator(reconstructions.contiguous().detach())
-            else:
-                logits_real = self.discriminator(torch.cat((inputs.contiguous().detach(), cond), dim=1))
-                logits_fake = self.discriminator(torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
 
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
-
-            log = {
-                "{}/disc_loss".format(split): disc_factor * d_loss.clone().detach().mean(),
-                   #"{}/logits_real".format(split): logits_real.detach().mean(),
-                   #"{}/logits_fake".format(split): logits_fake.detach().mean()
-                   }
-            return d_loss, log
 
 class VQLPIPSWithDiscriminatorOCR(nn.Module):
     def __init__(self, disc_start, codebook_weight=1.0, pixelloss_weight=1.0,
                  disc_num_layers=3, disc_in_channels=3, disc_factor=1.0, disc_weight=1.0,
                  perceptual_weight=0.2, ocr_perceptual_weight=1.0, use_actnorm=False, disc_conditional=False,
-                 disc_ndf=64, disc_loss="hinge", less4blank_loss=False):
+                 disc_ndf=64, disc_loss="hinge"):
         super().__init__()
         assert disc_loss in ["hinge", "vanilla"]
         self.codebook_weight = codebook_weight
@@ -306,7 +295,6 @@ class VQLPIPSWithDiscriminatorOCR(nn.Module):
         self.disc_factor = disc_factor
         self.discriminator_weight = disc_weight
         self.disc_conditional = disc_conditional
-        self.less4blank_loss = less4blank_loss
 
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:

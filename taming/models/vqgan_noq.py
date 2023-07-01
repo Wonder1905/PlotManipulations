@@ -109,39 +109,39 @@ class VQModelCTCAuxCondNoQ(pl.LightningModule):
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         self.batch_counter+=1
-        batch,meta_data,tensor_nonbin,out_seg_map = batch
+        batch,meta_data,tensor_nonbin,target_text_mask = batch
         input_image = self.get_input(batch, "input_image")
         output_image = self.get_input(batch, "output_image")
 
-        xrec, ctc_loss = self(input_image,batch["prompt"],tensor_nonbin)#,titles=meta_data["title"],lop_concats=meta_data["lop_concat"])
+        xrec, pred_text_mask = self(input_image,batch["prompt"],tensor_nonbin)#,titles=meta_data["title"],lop_concats=meta_data["lop_concat"])
         if optimizer_idx == 0:
-            aeloss, log_dict_ae = self.loss( output_image, xrec, 0, self.global_step,
-                                            last_layer=self.get_last_layer(),  split="train")
+            total_loss, log_dict_ae = self.loss(output_image , xrec,target_text_mask,pred_text_mask, 0, self.global_step,
+                                            last_layer=self.get_last_layer(),  split="train",target_images=output_image)
 
-            aeloss = aeloss#+0.1*ctc_loss
-            log_dict_ae["ctc_loss"]=ctc_loss
-            #self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            total_loss = total_loss#+0.1*ctc_loss
+            #log_dict_ae["ctc_loss"]=ctc_loss
+            #self.log("train/total_loss", total_loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-            return aeloss
+            return total_loss
 
         if optimizer_idx == 1:
                 # discriminator
-            discloss, log_dict_disc = self.loss( output_image, xrec, 1, self.global_step,
-                                                last_layer=self.get_last_layer(), split="train")
+            discloss, log_dict_disc = self.loss( output_image, xrec, optimizer_idx= 1,global_step= self.global_step,
+                                                last_layer=self.get_last_layer(), split="train",target_images=output_image)
             #self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
             return discloss
 
     def validation_step(self, batch, batch_idx):
         #batch = batch
-        batch,meta_data,tensor_nonbin,out_seg_map = batch
+        batch,meta_data,tensor_nonbin,target_text_mask = batch
         input_image = self.get_input(batch, "input_image")
         output_image = self.get_input(batch, "output_image")
-        xrec, ctc_loss = self(input_image,batch["prompt"])#,titles=meta_data["title"],lop_concats=meta_data["lop_concat"])
-        aeloss, log_dict_ae  = self.loss( input_image, xrec, 0, self.global_step,
+        xrec, pred_text_mask = self(input_image,batch["prompt"])#,titles=meta_data["title"],lop_concats=meta_data["lop_concat"])
+        aeloss, log_dict_ae  = self.loss( input_image, xrec,target_text_mask,pred_text_mask, optimizer_idx=0, global_step = self.global_step,
                                         last_layer=self.get_last_layer(), split="val",target_images=output_image)
 
-        discloss, log_dict_disc = self.loss( output_image, xrec, 1, self.global_step,
+        discloss, log_dict_disc = self.loss( output_image, xrec, optimizer_idx=1,  global_step=self.global_step,
                                             last_layer=self.get_last_layer(), split="val")
         aeloss = aeloss #+ 0.1 * ctc_loss
         #log_dict_ae["ctc_loss"] = ctc_loss
@@ -222,21 +222,25 @@ class VQModelCTCAuxCondNoQ(pl.LightningModule):
     def log_images(self, batch, **kwargs):
         log = dict()
         if isinstance(batch,list):
-            batch = batch[0]
+            batch,meta_data,tensor_nonbin,target_text_mask = batch
         if self.image_key in batch:
             x = self.get_input(batch, self.image_key)
         else:
             output_image = self.get_input(batch, "output_image")
             input_image = self.get_input(batch, "input_image")
         input_image = input_image.to(self.device)
-        xrec, _ = self(input_image,batch["prompt"])
+        xrec, pred_text_mask  = self(input_image,batch["prompt"])
         print("Logging Image")
         if output_image.shape[1] > 3:
             # colorize with random projection
             assert xrec.shape[1] > 3
             output_image = self.to_rgb(output_image)
             xrec = self.to_rgb(xrec)
-        log["inputs"] = torch.cat([input_image[0],output_image[0],xrec[0]],dim=-1)
+        log["preditions"] = torch.cat([input_image[0],output_image[0],xrec[0]],dim=-1)
+        target_text_mask = F.interpolate(target_text_mask.unsqueeze(1), size=(64, 64), mode='nearest').float()
+        target_text_mask_log = target_text_mask[0].view(1, 64, 64).repeat(3,1,1)
+        pred_text_mask_log = pred_text_mask[0].view(1, 64, 64).repeat(3,1,1)
+        log["mask pred"] = torch.cat([target_text_mask_log,pred_text_mask_log],dim=-1)
         #log["reconstructions"] = xrec
         return log
 

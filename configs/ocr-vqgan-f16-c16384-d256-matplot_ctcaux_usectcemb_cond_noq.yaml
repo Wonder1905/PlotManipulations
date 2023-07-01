@@ -30,9 +30,9 @@ model:
         disc_start: 100
         disc_weight: 0.25
         disc_num_layers: 2
-        codebook_weight: 1.0
-
+        codebook_weight: 0.0
         perceptual_weight: 0.2
+        mask_supervision_weight: 1
         ocr_perceptual_weight: 1.0
 
     #ckpt_path: condtext_512_tanh_noq/2023-06-10T08-54-57_condtext_512_tanh/checkpoints/last.ckpt
@@ -41,8 +41,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
-    num_workers: 1
+    batch_size: 2
+    num_workers: 16
     train:
       target: taming.data.custom.CustomTextTrain
       params:
